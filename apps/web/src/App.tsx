@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, RefObject } from "react";
 import { getSubscriptionUrl } from "./api";
+import { copyText } from "./clipboard";
 import { moveItem, renameRouteTarget } from "./config";
 import { useConfigStore } from "./store";
 import type {
@@ -954,7 +955,7 @@ export default function App() {
 
   const copySubscription = async () => {
     try {
-      await navigator.clipboard.writeText(subscriptionUrl);
+      await copyText(subscriptionUrl);
       setCopyState("已复制");
     } catch {
       setCopyState("复制失败");
