@@ -15,7 +15,11 @@ export async function copyText(text: string): Promise<void> {
   textarea.style.opacity = "0";
   document.body.appendChild(textarea);
   textarea.select();
-  const copied = document.execCommand("copy");
-  textarea.remove();
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } finally {
+    textarea.remove();
+  }
   if (!copied) throw new Error("clipboard copy failed");
 }

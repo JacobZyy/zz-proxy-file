@@ -30,4 +30,25 @@ describe("copyText", () => {
     expect(execCommand).toHaveBeenCalledWith("copy");
     expect(textarea.remove).toHaveBeenCalledOnce();
   });
+
+  it("removes the fallback element when copying throws", async () => {
+    const textarea = {
+      value: "",
+      style: { position: "", opacity: "" },
+      setAttribute: vi.fn(),
+      select: vi.fn(),
+      remove: vi.fn(),
+    };
+    vi.stubGlobal("navigator", {});
+    vi.stubGlobal("document", {
+      createElement: vi.fn(() => textarea),
+      body: { appendChild: vi.fn() },
+      execCommand: vi.fn(() => {
+        throw new Error("denied");
+      }),
+    });
+
+    await expect(copyText("subscription-url")).rejects.toThrow("denied");
+    expect(textarea.remove).toHaveBeenCalledOnce();
+  });
 });
