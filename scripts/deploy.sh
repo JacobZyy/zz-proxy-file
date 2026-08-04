@@ -38,8 +38,6 @@ CADDY_MANAGED=0
 CADDY_REQUIRED=0
 CADDY_MODE=""
 CADDY_INSTALLED_MODE=""
-CADDY_PASSWORD=""
-CADDY_PASSWORD_HASH=""
 DB_PASSWORD=""
 SUBSCRIPTION_TOKEN=""
 WRONG_SUBSCRIPTION_TOKEN=""
@@ -294,7 +292,7 @@ check_postgres_data_ownership() {
 preflight() {
   [[ "$EUID" -eq 0 ]] || die "run as root"
 
-  local command_name caddy_template caddy_test_hash caddy_version="unmanaged" rust_host
+  local command_name caddy_template caddy_version="unmanaged" rust_host
   for command_name in \
     awk bash cargo corepack curl dnf file find flock git grep install journalctl node openssl \
     python3 readlink rpm rsync runuser rustc sed sha256sum ss stat systemctl; do
@@ -311,9 +309,7 @@ preflight() {
     runuser -u caddy -- caddy validate --config "$CADDY_FILE" >/dev/null
     caddy_version="$(caddy version | awk '{print $1}')"
     caddy_template="$(mktemp)"
-    caddy_test_hash="$(printf '%s\n' 'zz-proxy-file-preflight-only' |
-      caddy hash-password --algorithm bcrypt)"
-    render_caddy_config "$caddy_template" "$CADDY_MODE" "$caddy_test_hash"
+    render_caddy_config "$caddy_template" "$CADDY_MODE"
     caddy fmt --overwrite "$caddy_template" >/dev/null
     grep -Fxq "# zz-proxy-file-caddy-mode: $CADDY_MODE" "$caddy_template" ||
       die "Caddy formatter removed the deployment mode marker"
@@ -345,39 +341,19 @@ preflight() {
   log "repo=$(git -C "$REPO_DIR" rev-parse --short=12 HEAD) node=$(node --version) rust=$(rustc --version | awk '{print $2}') caddy=$caddy_version"
 }
 
-confirm_caddy_deployment() {
-  local answer expected_answer password_confirm
-  local LC_ALL=C
-
+warn_caddy_deployment() {
   [[ "$WITH_CADDY" -eq 1 || "$WITH_PORT_1078" -eq 1 ]] || return 0
-  [[ -t 0 ]] || die "publishing Caddy routes requires an interactive terminal"
   if [[ "$WITH_PORT_1078" -eq 1 ]]; then
     printf '%s\n' \
       'WARNING: Port 1078 uses plaintext HTTP.' \
-      'Basic Auth credentials and subscription tokens can be intercepted in transit.' \
+      'The frontend, CRUD API, runtime token endpoint, and configuration contents are public.' \
       'All configuration contents, including proxy usernames and passwords, can be intercepted.' \
       'Use this mode only for temporary testing; switch to HTTPS after ICP filing.'
-    expected_answer="INSECURE-HTTP"
   else
     printf '%s\n' \
-      'WARNING: This publishes HTTPS routes and rotates the management password.' \
-      'Only continue after ICP filing is complete.' \
-      'The frontend and CRUD API use Basic Auth; subscriptions require a token.'
-    expected_answer="DEPLOY"
+      'WARNING: This publishes the frontend and CRUD API without login.' \
+      'Only continue after ICP filing is complete.'
   fi
-  read -r -p "Type $expected_answer to continue: " answer
-  [[ "$answer" == "$expected_answer" ]] || die "Caddy deployment cancelled"
-  read -r -s -p 'Caddy management password (minimum 16 characters): ' CADDY_PASSWORD
-  printf '\n'
-  read -r -s -p 'Confirm Caddy management password: ' password_confirm
-  printf '\n'
-  [[ "$CADDY_PASSWORD" == "$password_confirm" ]] || die "Caddy passwords do not match"
-  [[ "${#CADDY_PASSWORD}" -ge 16 ]] || die "Caddy password is shorter than 16 characters"
-  [[ "$CADDY_PASSWORD" =~ ^[[:print:]]+$ ]] ||
-    die "Caddy password must contain printable ASCII only (no CR, LF, or tab)"
-  CADDY_PASSWORD_HASH="$(printf '%s\n' "$CADDY_PASSWORD" | caddy hash-password --algorithm bcrypt)"
-  [[ -n "$CADDY_PASSWORD_HASH" ]] || die "failed to hash Caddy password"
-  unset password_confirm answer
 }
 
 acquire_deploy_lock() {
@@ -504,14 +480,6 @@ wait_for_api_health() {
 write_curl_url_config() {
   local config_file="$1" url="$2"
   printf 'url = "%s"\n' "$url" >"$config_file"
-  chmod 0600 "$config_file"
-}
-
-write_curl_auth_config() {
-  local config_file="$1" escaped_password="$CADDY_PASSWORD"
-  escaped_password="${escaped_password//\\/\\\\}"
-  escaped_password="${escaped_password//\"/\\\"}"
-  printf 'user = "clashadmin:%s"\n' "$escaped_password" >"$config_file"
   chmod 0600 "$config_file"
 }
 
@@ -889,8 +857,8 @@ verify_api() {
 }
 
 verify_caddy() {
-  local frontend_status api_status subscription_status wrong_status health_response
-  local frontend_temp api_temp subscription_temp auth_config token_config token_body token_headers
+  local subscription_status wrong_status health_response
+  local frontend_temp api_temp subscription_temp token_config token_body token_headers
   local caddy_base_url
   local -a resolve_args=()
 
@@ -904,44 +872,38 @@ verify_caddy() {
   health_response="$(curl -q "${resolve_args[@]}" -fsS "$caddy_base_url/clash-config-tool/health")" ||
     return 1
   [[ "$health_response" == *'"status":"ok"'* ]] || return 1
-  frontend_status="$(curl -q "${resolve_args[@]}" -sS -o /dev/null -w '%{http_code}' "$caddy_base_url/clash-config/")"
-  [[ "$frontend_status" == "401" ]] || return 1
-  api_status="$(curl -q "${resolve_args[@]}" -sS -o /dev/null -w '%{http_code}' "$caddy_base_url/clash-config-tool/api/configs")"
-  [[ "$api_status" == "401" ]] || return 1
 
-  auth_config="$(mktemp)"
-  write_curl_auth_config "$auth_config"
   frontend_temp="$(mktemp)"
-  curl -q --config "$auth_config" "${resolve_args[@]}" -fsS "$caddy_base_url/clash-config/" >"$frontend_temp" || {
-    rm -f "$auth_config" "$frontend_temp"
+  curl -q "${resolve_args[@]}" -fsS "$caddy_base_url/clash-config/" >"$frontend_temp" || {
+    rm -f "$frontend_temp"
     return 1
   }
   grep -qi '<!doctype html' "$frontend_temp" || {
-    rm -f "$auth_config" "$frontend_temp"
+    rm -f "$frontend_temp"
     return 1
   }
   rm -f "$frontend_temp"
 
   api_temp="$(mktemp)"
-  curl -q --config "$auth_config" "${resolve_args[@]}" -fsS "$caddy_base_url/clash-config-tool/api/configs" >"$api_temp" || {
-    rm -f "$auth_config" "$api_temp"
+  curl -q "${resolve_args[@]}" -fsS "$caddy_base_url/clash-config-tool/api/configs" >"$api_temp" || {
+    rm -f "$api_temp"
     return 1
   }
   python3 -c 'import json, sys; assert isinstance(json.load(open(sys.argv[1])), list)' "$api_temp" || {
-    rm -f "$auth_config" "$api_temp"
+    rm -f "$api_temp"
     return 1
   }
   rm -f "$api_temp"
 
   token_body="$(mktemp)"
   token_headers="$(mktemp)"
-  if ! curl -q --config "$auth_config" "${resolve_args[@]}" -fsS -D "$token_headers" \
+  if ! curl -q "${resolve_args[@]}" -fsS -D "$token_headers" \
     -o "$token_body" "$caddy_base_url/clash-config-tool/api/subscription-token" ||
     ! verify_subscription_token_response "$token_body" "$token_headers"; then
-    rm -f "$auth_config" "$token_body" "$token_headers"
+    rm -f "$token_body" "$token_headers"
     return 1
   fi
-  rm -f "$auth_config" "$token_body" "$token_headers"
+  rm -f "$token_body" "$token_headers"
 
   if [[ -n "$VERIFY_SUBSCRIPTION_PATH" ]]; then
     subscription_status="$(curl -q "${resolve_args[@]}" -sS -o /dev/null -w '%{http_code}' "$caddy_base_url/clash-config-tool/subscriptions/$VERIFY_SUBSCRIPTION_PATH")"
@@ -975,57 +937,12 @@ verify_caddy() {
 }
 
 verify_managed_caddy() {
-  local frontend_status api_status subscription_status wrong_status token_config subscription_temp
-  local health_response caddy_base_url
-  local -a resolve_args=()
-
-  if [[ "$CADDY_MODE" == "https" ]]; then
-    caddy_base_url="https://$PUBLIC_HOST"
-    resolve_args=(--resolve "$PUBLIC_HOST:443:127.0.0.1")
-  else
-    caddy_base_url="http://127.0.0.1:1078"
-  fi
-
   runuser -u caddy -- test -r "$CURRENT_LINK/web/index.html" || return 1
-  health_response="$(curl -q "${resolve_args[@]}" -fsS "$caddy_base_url/clash-config-tool/health")" ||
-    return 1
-  [[ "$health_response" == *'"status":"ok"'* ]] || return 1
-  frontend_status="$(curl -q "${resolve_args[@]}" -sS -o /dev/null -w '%{http_code}' "$caddy_base_url/clash-config/")"
-  [[ "$frontend_status" == "401" ]] || return 1
-  api_status="$(curl -q "${resolve_args[@]}" -sS -o /dev/null -w '%{http_code}' "$caddy_base_url/clash-config-tool/api/configs")"
-  [[ "$api_status" == "401" ]] || return 1
-
-  if [[ -n "$VERIFY_SUBSCRIPTION_PATH" ]]; then
-    subscription_status="$(curl -q "${resolve_args[@]}" -sS -o /dev/null -w '%{http_code}' "$caddy_base_url/clash-config-tool/subscriptions/$VERIFY_SUBSCRIPTION_PATH")"
-    [[ "$subscription_status" == "404" ]] || return 1
-    token_config="$(mktemp)"
-    write_curl_url_config "$token_config" \
-      "$caddy_base_url/clash-config-tool/subscriptions/$VERIFY_SUBSCRIPTION_PATH?token=$WRONG_SUBSCRIPTION_TOKEN"
-    if ! wrong_status="$(curl -q --config "$token_config" "${resolve_args[@]}" -sS -o /dev/null -w '%{http_code}')"; then
-      rm -f "$token_config"
-      return 1
-    fi
-    rm -f "$token_config"
-    [[ "$wrong_status" == "404" ]] || return 1
-    subscription_temp="$(mktemp)"
-    token_config="$(mktemp)"
-    write_curl_url_config "$token_config" \
-      "$caddy_base_url/clash-config-tool/subscriptions/$VERIFY_SUBSCRIPTION_PATH?token=$SUBSCRIPTION_TOKEN"
-    curl -q --config "$token_config" "${resolve_args[@]}" -fsS >"$subscription_temp" || {
-      rm -f "$token_config" "$subscription_temp"
-      return 1
-    }
-    rm -f "$token_config"
-    [[ -s "$subscription_temp" ]] || {
-      rm -f "$subscription_temp"
-      return 1
-    }
-    rm -f "$subscription_temp"
-  fi
+  verify_caddy
 }
 
 render_caddy_config() {
-  local output_file="$1" caddy_mode="$2" password_hash="$3"
+  local output_file="$1" caddy_mode="$2"
 
   {
     printf '%s\n' \
@@ -1037,11 +954,6 @@ CADDY
     if [[ "$caddy_mode" == "https" ]]; then
       cat <<'CADDY'
 	redir /clash-config /clash-config/ 308
-
-	@clashConfigAdmin path /clash-config/* /clash-config-tool/api/*
-	basic_auth @clashConfigAdmin {
-		clashadmin CLASH_CONFIG_PASSWORD_HASH
-	}
 
 	handle /clash-config-tool/* {
 		reverse_proxy 127.0.0.1:3001
@@ -1073,11 +985,6 @@ CADDY
       cat <<'CADDY'
 	redir /clash-config /clash-config/ 308
 
-	@clashConfigAdmin path /clash-config/* /clash-config-tool/api/*
-	basic_auth @clashConfigAdmin {
-		clashadmin CLASH_CONFIG_PASSWORD_HASH
-	}
-
 	handle /clash-config-tool/* {
 		reverse_proxy 127.0.0.1:3001
 	}
@@ -1101,18 +1008,6 @@ CADDY
 }
 CADDY
   } >"$output_file"
-
-  python3 - "$output_file" "$password_hash" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-text = path.read_text()
-placeholder = "CLASH_CONFIG_PASSWORD_HASH"
-if text.count(placeholder) != 1:
-    raise SystemExit("unexpected Caddy password placeholder count")
-path.write_text(text.replace(placeholder, sys.argv[2]))
-PY
 }
 
 install_caddy_routes() {
@@ -1121,7 +1016,7 @@ install_caddy_routes() {
   check_caddy_ownership
   cp -a "$CADDY_FILE" "$BACKUP_DIR/Caddyfile"
   caddy_temp="$(mktemp /etc/caddy/Caddyfile.XXXXXX)"
-  render_caddy_config "$caddy_temp" "$CADDY_MODE" "$CADDY_PASSWORD_HASH"
+  render_caddy_config "$caddy_temp" "$CADDY_MODE"
   chown root:caddy "$caddy_temp"
   chmod 0640 "$caddy_temp"
   caddy fmt --overwrite "$caddy_temp" >/dev/null
@@ -1173,7 +1068,7 @@ if [[ "$CHECK_ONLY" -eq 1 ]]; then
   exit 0
 fi
 
-confirm_caddy_deployment
+warn_caddy_deployment
 acquire_deploy_lock
 recheck_caddy_state_after_lock
 load_secrets
@@ -1205,7 +1100,7 @@ fi
 
 mark_release_good
 DEPLOYMENT_STARTED=0
-unset CADDY_PASSWORD CADDY_PASSWORD_HASH DB_PASSWORD SUBSCRIPTION_TOKEN WRONG_SUBSCRIPTION_TOKEN
+unset DB_PASSWORD SUBSCRIPTION_TOKEN WRONG_SUBSCRIPTION_TOKEN
 log "deployment complete: $DEPLOY_ID"
 log "API health: $API_URL/health"
 if [[ "$CADDY_MODE" == "port-1078" ]]; then
