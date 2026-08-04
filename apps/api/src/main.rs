@@ -22,6 +22,7 @@ const DEFAULT_DATABASE_URL: &str = "postgres://postgres:postgres@localhost:54329
 const DEFAULT_BIND_ADDR: &str = "127.0.0.1:3001";
 const DEFAULT_CORS_ORIGIN: &str = "http://127.0.0.1:5173";
 const DEFAULT_CONFIG_SEED: &str = "default-clash-config-v1";
+const API_PREFIX: &str = "/clash-config-tool";
 
 #[derive(Clone)]
 struct AppState {
@@ -128,14 +129,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn app(state: AppState, cors_origin: HeaderValue) -> Router {
-    Router::new()
+    let prefixed_routes = Router::new()
         .route("/health", get(health))
         .route("/api/configs", get(list_configs).post(create_config))
         .route(
             "/api/configs/{id}",
             get(get_config).put(update_config).delete(delete_config),
         )
-        .route("/subscriptions/{slug}", get(subscription))
+        .route("/subscriptions/{slug}", get(subscription));
+
+    Router::new()
+        .nest(API_PREFIX, prefixed_routes)
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
         .layer(TraceLayer::new_for_http())

@@ -1,6 +1,10 @@
 import type { ApiErrorBody, ConfigDraft, ConfigRecord } from "./types";
 
-const apiBase = (import.meta.env.VITE_API_URL ?? "").replace(/\/$/, "");
+const backendPrefix = "/clash-config-tool";
+const apiBase = (import.meta.env.VITE_API_URL || backendPrefix).replace(
+  /\/$/,
+  "",
+);
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${apiBase}${path}`, {
@@ -55,9 +59,16 @@ export function deleteConfig(id: number): Promise<void> {
 }
 
 export function getSubscriptionUrl(slug: string): string {
+  const path = `/subscriptions/${encodeURIComponent(slug)}`;
   const configuredOrigin = (
-    import.meta.env.VITE_SUBSCRIPTION_ORIGIN || apiBase
+    import.meta.env.VITE_SUBSCRIPTION_ORIGIN || ""
   ).replace(/\/$/, "");
-  const origin = configuredOrigin || window.location.origin;
-  return `${origin}/subscriptions/${encodeURIComponent(slug)}`;
+  if (configuredOrigin) {
+    return `${configuredOrigin}${backendPrefix}${path}`;
+  }
+
+  const absoluteApiBase = new URL(apiBase, window.location.origin)
+    .toString()
+    .replace(/\/$/, "");
+  return `${absoluteApiBase}${path}`;
 }
