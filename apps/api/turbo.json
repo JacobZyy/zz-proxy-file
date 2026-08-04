@@ -1,0 +1,28 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "build": {
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/clash.yaml"],
+      "outputs": ["target/release/**"]
+    },
+    "check": {
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/clash.yaml"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true,
+      "dependsOn": ["db:up"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/clash.yaml"],
+      "passThroughEnv": [
+        "BIND_ADDR",
+        "CORS_ORIGIN",
+        "DATABASE_URL",
+        "RUST_LOG"
+      ]
+    },
+    "test": {
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/clash.yaml"]
+    }
+  }
+}

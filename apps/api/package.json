@@ -1,0 +1,13 @@
+{
+  "name": "@zz-proxy/api",
+  "private": true,
+  "scripts": {
+    "build": "cargo build --release",
+    "check": "cargo check",
+    "dev": "cargo run",
+    "format": "cargo fmt --check",
+    "test": "cargo test",
+    "db:up": "docker compose up -d --wait",
+    "db:down": "docker compose down"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "zz-proxy-file",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "pnpm@10.12.4",
+  "scripts": {
+    "build": "turbo run build",
+    "check": "turbo run check",
+    "dev": "turbo run dev",
+    "test": "turbo run test",
+    "db:up": "turbo run db:up --filter=@zz-proxy/api",
+    "db:down": "turbo run db:down --filter=@zz-proxy/api"
+  },
+  "devDependencies": {
+    "turbo": "2.10.8"
+  }
+}

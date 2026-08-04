@@ -1,0 +1,136 @@
+@import "tailwindcss";
+
+@plugin "daisyui" {
+  themes: false;
+  logs: false;
+}
+
+@plugin "daisyui/theme" {
+  name: "frappe";
+  default: true;
+  prefersdark: true;
+  color-scheme: dark;
+
+  --color-base-100: #303446;
+  --color-base-200: #292c3c;
+  --color-base-300: #232634;
+  --color-base-content: #c6d0f5;
+  --color-primary: #8caaee;
+  --color-primary-content: #232634;
+  --color-secondary: #ca9ee6;
+  --color-secondary-content: #232634;
+  --color-accent: #81c8be;
+  --color-accent-content: #232634;
+  --color-neutral: #51576d;
+  --color-neutral-content: #c6d0f5;
+  --color-info: #85c1dc;
+  --color-info-content: #232634;
+  --color-success: #a6d189;
+  --color-success-content: #232634;
+  --color-warning: #e5c890;
+  --color-warning-content: #232634;
+  --color-error: #e78284;
+  --color-error-content: #232634;
+
+  --radius-selector: 2rem;
+  --radius-field: 0.5rem;
+  --radius-box: 0.75rem;
+  --size-selector: 0.25rem;
+  --size-field: 0.25rem;
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
+}
+
+@layer base {
+  html {
+    background: var(--color-base-300);
+  }
+
+  body {
+    min-width: 320px;
+    min-height: 100vh;
+    margin: 0;
+    font-family: "Avenir Next", Avenir, "Segoe UI", sans-serif;
+  }
+
+  button,
+  input,
+  select {
+    font: inherit;
+  }
+
+  ::selection {
+    color: var(--color-primary-content);
+    background: var(--color-primary);
+  }
+}
+
+.display-type {
+  font-family: "Avenir Next Condensed", "Arial Narrow", sans-serif;
+  font-stretch: condensed;
+}
+
+.data-type {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+.route-board {
+  background-image:
+    linear-gradient(
+      90deg,
+      transparent 0,
+      transparent calc(100% - 1px),
+      color-mix(in srgb, var(--color-base-content) 5%, transparent)
+        calc(100% - 1px)
+    ),
+    linear-gradient(
+      0deg,
+      transparent 0,
+      transparent calc(100% - 1px),
+      color-mix(in srgb, var(--color-base-content) 5%, transparent)
+        calc(100% - 1px)
+    );
+  background-size: 28px 28px;
+}
+
+.route-lane {
+  position: relative;
+  padding-left: 1.75rem;
+}
+
+.route-lane::before {
+  position: absolute;
+  top: 0.8rem;
+  bottom: 0.8rem;
+  left: 0.5rem;
+  width: 2px;
+  content: "";
+  background: color-mix(in srgb, var(--color-accent) 42%, transparent);
+}
+
+.route-node {
+  position: relative;
+}
+
+.route-node::before {
+  position: absolute;
+  top: 50%;
+  left: -1.55rem;
+  width: 0.72rem;
+  height: 0.72rem;
+  content: "";
+  background: var(--color-base-200);
+  border: 2px solid var(--color-accent);
+  border-radius: 999px;
+  transform: translateY(-50%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
