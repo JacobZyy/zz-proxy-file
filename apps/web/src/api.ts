@@ -58,17 +58,46 @@ export function deleteConfig(id: number): Promise<void> {
   return request<void>(`/api/configs/${id}`, { method: "DELETE" });
 }
 
-export function getSubscriptionUrl(slug: string): string {
+export async function getSubscriptionToken(): Promise<string> {
+  const response = await request<{ token: string | null }>(
+    "/api/subscription-token",
+  );
+  return response.token ?? "";
+}
+
+function getConfiguredSubscriptionOrigin(): string {
+  const value = import.meta.env.VITE_SUBSCRIPTION_ORIGIN || "";
+  if (!value) return "";
+
+  const url = new URL(value);
+  if (
+    !["http:", "https:"].includes(url.protocol) ||
+    url.username ||
+    url.password ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  ) {
+    throw new Error("VITE_SUBSCRIPTION_ORIGIN must be an HTTP(S) origin");
+  }
+  return url.origin;
+}
+
+export function getSubscriptionUrl(slug: string, token = ""): string {
   const path = `/subscriptions/${encodeURIComponent(slug)}`;
-  const configuredOrigin = (
-    import.meta.env.VITE_SUBSCRIPTION_ORIGIN || ""
-  ).replace(/\/$/, "");
+  const configuredOrigin = getConfiguredSubscriptionOrigin();
+  let url: string;
   if (configuredOrigin) {
-    return `${configuredOrigin}${backendPrefix}${path}`;
+    url = `${configuredOrigin}${backendPrefix}${path}`;
+  } else {
+    const absoluteApiBase = new URL(apiBase, window.location.origin)
+      .toString()
+      .replace(/\/$/, "");
+    url = `${absoluteApiBase}${path}`;
   }
 
-  const absoluteApiBase = new URL(apiBase, window.location.origin)
-    .toString()
-    .replace(/\/$/, "");
-  return `${absoluteApiBase}${path}`;
+  if (!token) return url;
+  const subscriptionUrl = new URL(url);
+  subscriptionUrl.searchParams.set("token", token);
+  return subscriptionUrl.toString();
 }

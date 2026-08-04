@@ -63,4 +63,29 @@ describe("Clash document edits", () => {
       "https://subscriptions.example/clash-config-tool/subscriptions/home",
     );
   });
+
+  it("adds the runtime subscription token", async () => {
+    vi.stubEnv("VITE_API_URL", "/clash-config-tool");
+    vi.stubEnv("VITE_SUBSCRIPTION_ORIGIN", "https://subscriptions.example");
+    vi.resetModules();
+    const { getSubscriptionUrl } = await import("./api");
+
+    expect(getSubscriptionUrl("home", "secret/value")).toBe(
+      "https://subscriptions.example/clash-config-tool/subscriptions/home?token=secret%2Fvalue",
+    );
+  });
+
+  it("rejects a subscription URL that is not an origin", async () => {
+    vi.stubEnv("VITE_API_URL", "/clash-config-tool");
+    vi.stubEnv(
+      "VITE_SUBSCRIPTION_ORIGIN",
+      "https://user@example.com/private?token=leak",
+    );
+    vi.resetModules();
+    const { getSubscriptionUrl } = await import("./api");
+
+    expect(() => getSubscriptionUrl("home")).toThrow(
+      "VITE_SUBSCRIPTION_ORIGIN must be an HTTP(S) origin",
+    );
+  });
 });

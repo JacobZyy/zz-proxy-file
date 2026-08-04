@@ -2,6 +2,7 @@ import { create } from "zustand";
 import {
   createConfig as createConfigRequest,
   deleteConfig as deleteConfigRequest,
+  getSubscriptionToken,
   listConfigs,
   updateConfig,
 } from "./api";
@@ -15,6 +16,7 @@ interface ConfigState {
   dirty: boolean;
   busy: boolean;
   error: string | null;
+  subscriptionToken: string;
   load: () => Promise<void>;
   select: (id: number) => void;
   setIdentity: (patch: Partial<Pick<ConfigDraft, "name" | "slug">>) => void;
@@ -44,11 +46,15 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
   dirty: false,
   busy: false,
   error: null,
+  subscriptionToken: "",
 
   load: async () => {
     set({ busy: true, error: null });
     try {
-      const configs = await listConfigs();
+      const [configs, subscriptionToken] = await Promise.all([
+        listConfigs(),
+        getSubscriptionToken(),
+      ]);
       const active = configs[0] ?? null;
       set({
         configs,
@@ -56,6 +62,7 @@ export const useConfigStore = create<ConfigState>((set, get) => ({
         draft: active ? toDraft(active) : null,
         dirty: false,
         busy: false,
+        subscriptionToken,
       });
     } catch (error) {
       set({ busy: false, error: errorMessage(error) });

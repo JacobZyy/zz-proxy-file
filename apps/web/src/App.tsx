@@ -901,6 +901,7 @@ export default function App() {
     dirty,
     busy,
     error,
+    subscriptionToken,
     load,
     select,
     setIdentity,
@@ -934,8 +935,8 @@ export default function App() {
   };
 
   const subscriptionUrl = useMemo(
-    () => (draft ? getSubscriptionUrl(draft.slug) : ""),
-    [draft],
+    () => (draft ? getSubscriptionUrl(draft.slug, subscriptionToken) : ""),
+    [draft, subscriptionToken],
   );
 
   const selectConfig = (id: number) => {

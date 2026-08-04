@@ -1,11 +1,14 @@
 mod validation;
 
-use std::{env, error::Error};
+use std::{env, error::Error, io};
 
 use axum::{
     Json, Router,
-    extract::{Path, State, rejection::JsonRejection},
-    http::{HeaderMap, HeaderValue, Method, StatusCode, header::CONTENT_TYPE},
+    extract::{Path, Query, State, rejection::JsonRejection},
+    http::{
+        HeaderMap, HeaderValue, Method, StatusCode,
+        header::{CACHE_CONTROL, CONTENT_TYPE, REFERRER_POLICY},
+    },
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -27,6 +30,7 @@ const API_PREFIX: &str = "/clash-config-tool";
 #[derive(Clone)]
 struct AppState {
     pool: PgPool,
+    subscription_token: Option<String>,
 }
 
 #[derive(FromRow)]
@@ -55,6 +59,16 @@ struct UpsertConfig {
     name: String,
     slug: String,
     document: Value,
+}
+
+#[derive(Deserialize)]
+struct SubscriptionQuery {
+    token: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SubscriptionTokenResponse {
+    token: Option<String>,
 }
 
 enum AppError {
@@ -120,7 +134,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     seed_default_config(&pool).await?;
 
     let cors_origin = env::var("CORS_ORIGIN").unwrap_or_else(|_| DEFAULT_CORS_ORIGIN.to_owned());
-    let app = app(AppState { pool }, cors_origin.parse()?);
+    let subscription_token = parse_subscription_token(env::var("SUBSCRIPTION_TOKEN").ok())?;
+    let app = app(
+        AppState {
+            pool,
+            subscription_token,
+        },
+        cors_origin.parse()?,
+    );
     let bind_addr = env::var("BIND_ADDR").unwrap_or_else(|_| DEFAULT_BIND_ADDR.to_owned());
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     tracing::info!(address = %bind_addr, "API listening");
@@ -132,6 +153,7 @@ fn app(state: AppState, cors_origin: HeaderValue) -> Router {
     let prefixed_routes = Router::new()
         .route("/health", get(health))
         .route("/api/configs", get(list_configs).post(create_config))
+        .route("/api/subscription-token", get(get_subscription_token))
         .route(
             "/api/configs/{id}",
             get(get_config).put(update_config).delete(delete_config),
@@ -142,7 +164,15 @@ fn app(state: AppState, cors_origin: HeaderValue) -> Router {
         .nest(API_PREFIX, prefixed_routes)
         .fallback(not_found)
         .method_not_allowed_fallback(method_not_allowed)
-        .layer(TraceLayer::new_for_http())
+        .layer(
+            TraceLayer::new_for_http().make_span_with(|request: &axum::extract::Request| {
+                tracing::debug_span!(
+                    "http_request",
+                    method = %request.method(),
+                    path = %request.uri().path(),
+                )
+            }),
+        )
         .layer(
             CorsLayer::new()
                 .allow_origin(cors_origin)
@@ -179,6 +209,17 @@ async fn seed_default_config(pool: &PgPool) -> Result<(), sqlx::Error> {
 
 async fn health() -> Json<Value> {
     Json(json!({ "status": "ok" }))
+}
+
+async fn get_subscription_token(
+    State(state): State<AppState>,
+) -> (HeaderMap, Json<SubscriptionTokenResponse>) {
+    (
+        private_response_headers(),
+        Json(SubscriptionTokenResponse {
+            token: state.subscription_token,
+        }),
+    )
 }
 
 async fn list_configs(State(state): State<AppState>) -> Result<Json<Vec<ConfigRecord>>, AppError> {
@@ -262,19 +303,61 @@ async fn delete_config(
 async fn subscription(
     State(state): State<AppState>,
     Path(slug): Path<String>,
+    Query(query): Query<SubscriptionQuery>,
 ) -> Result<(HeaderMap, String), AppError> {
+    if !subscription_authorized(state.subscription_token.as_deref(), query.token.as_deref()) {
+        return Err(AppError::NotFound);
+    }
+
     let document: Option<String> =
         sqlx::query_scalar("SELECT document FROM configurations WHERE slug = $1")
             .bind(slug)
             .fetch_optional(&state.pool)
             .await?;
     let document = document.ok_or(AppError::NotFound)?;
-    let mut headers = HeaderMap::new();
+    let mut headers = private_response_headers();
     headers.insert(
         CONTENT_TYPE,
         HeaderValue::from_static("text/yaml; charset=utf-8"),
     );
     Ok((headers, document))
+}
+
+fn parse_subscription_token(value: Option<String>) -> Result<Option<String>, io::Error> {
+    match value {
+        None => Ok(None),
+        Some(value) if value.is_empty() => Ok(None),
+        Some(value) if value.len() >= 32 && value.bytes().all(|byte| byte.is_ascii_graphic()) => {
+            Ok(Some(value))
+        }
+        Some(_) => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "SUBSCRIPTION_TOKEN must contain at least 32 printable ASCII characters without spaces",
+        )),
+    }
+}
+
+fn subscription_authorized(expected: Option<&str>, provided: Option<&str>) -> bool {
+    match expected {
+        Some(expected) => provided.is_some_and(|provided| secrets_equal(expected, provided)),
+        None => true,
+    }
+}
+
+fn secrets_equal(expected: &str, provided: &str) -> bool {
+    expected.len() == provided.len()
+        && expected
+            .bytes()
+            .zip(provided.bytes())
+            .fold(0, |difference, (left, right)| difference | (left ^ right))
+            == 0
+}
+
+fn private_response_headers() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("private, no-store"));
+    headers.insert(REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    headers
 }
 
 async fn find_config(pool: &PgPool, id: i64) -> Result<ConfigRow, AppError> {
@@ -363,7 +446,12 @@ async fn method_not_allowed() -> impl IntoResponse {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_id, validate_metadata};
+    use axum::http::header::{CACHE_CONTROL, REFERRER_POLICY};
+
+    use super::{
+        parse_id, parse_subscription_token, private_response_headers, subscription_authorized,
+        validate_metadata,
+    };
 
     #[test]
     fn validates_resource_identifiers() {
@@ -372,5 +460,27 @@ mod tests {
         assert!(validate_metadata("Personal", "personal-config").is_ok());
         assert!(validate_metadata("Personal", "-personal").is_err());
         assert!(validate_metadata("Personal", "PERSONAL").is_err());
+    }
+
+    #[test]
+    fn protects_subscriptions_when_a_token_is_configured() {
+        assert!(subscription_authorized(None, None));
+        assert!(subscription_authorized(
+            Some("0123456789abcdef0123456789abcdef"),
+            Some("0123456789abcdef0123456789abcdef")
+        ));
+        assert!(!subscription_authorized(
+            Some("0123456789abcdef0123456789abcdef"),
+            None
+        ));
+        assert!(!subscription_authorized(
+            Some("0123456789abcdef0123456789abcdef"),
+            Some("0123456789abcdef0123456789abcdee")
+        ));
+        assert!(parse_subscription_token(Some("short".to_owned())).is_err());
+
+        let headers = private_response_headers();
+        assert_eq!(headers[CACHE_CONTROL], "private, no-store");
+        assert_eq!(headers[REFERRER_POLICY], "no-referrer");
     }
 }
